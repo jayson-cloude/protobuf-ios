@@ -11,21 +11,18 @@ on:
 jobs:
   build-and-release:
     name: Build and Release
-    runs-on: macos-13 # 指定 macOS 13 (Intel) 或 14 (M1) 均可，这里用 13 较稳
+    runs-on: macos-13
     permissions:
       contents: write
 
     env:
       PROTOBUF_VERSION: 29.3
-      # 定义构建路径
       BUILD_DEVICE: ${{ github.workspace }}/build_device
       BUILD_SIM_ARM64: ${{ github.workspace }}/build_sim_arm64
       BUILD_SIM_X64: ${{ github.workspace }}/build_sim_x64
-      # 定义安装(产物)路径
       INSTALL_DEVICE: ${{ github.workspace }}/install/ios-device
       INSTALL_SIM_ARM64: ${{ github.workspace }}/install/ios-sim-arm64
       INSTALL_SIM_X64: ${{ github.workspace }}/install/ios-sim-x64
-      # 最终合并路径
       FINAL_SIM: ${{ github.workspace }}/install/ios-sim-fat
       OUTPUT_DIR: ${{ github.workspace }}/output
       PACKAGE_NAME: protobuf-ios-cpp
@@ -44,7 +41,7 @@ jobs:
 
       # ==================================================================
       # 1. 构建 iOS Device (arm64)
-      # 关键修复: 明确指定 CMAKE_SYSTEM_PROCESSOR=arm64 防止 SSE 标志
+      # 修复: 添加 -DCMAKE_EXE_LINKER_FLAGS="-framework CoreFoundation"
       # ==================================================================
       - name: Build for Device (arm64)
         run: |
@@ -59,13 +56,14 @@ jobs:
             -Dprotobuf_BUILD_PROTOC_BINARIES=OFF \
             -Dprotobuf_BUILD_SHARED_LIBS=OFF \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DCMAKE_CXX_STANDARD=17
+            -DCMAKE_CXX_STANDARD=17 \
+            -DCMAKE_EXE_LINKER_FLAGS="-framework CoreFoundation" 
           
           cmake --build ${{ env.BUILD_DEVICE }} --target install
 
       # ==================================================================
-      # 2. 构建 iOS Simulator (arm64) - Apple Silicon 模拟器
-      # 关键修复: 单独构建，不与 x86 混用
+      # 2. 构建 iOS Simulator (arm64)
+      # 修复: 添加 -DCMAKE_EXE_LINKER_FLAGS="-framework CoreFoundation"
       # ==================================================================
       - name: Build for Simulator (arm64)
         run: |
@@ -81,12 +79,14 @@ jobs:
             -Dprotobuf_BUILD_PROTOC_BINARIES=OFF \
             -Dprotobuf_BUILD_SHARED_LIBS=OFF \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DCMAKE_CXX_STANDARD=17
+            -DCMAKE_CXX_STANDARD=17 \
+            -DCMAKE_EXE_LINKER_FLAGS="-framework CoreFoundation"
 
           cmake --build ${{ env.BUILD_SIM_ARM64 }} --target install
 
       # ==================================================================
-      # 3. 构建 iOS Simulator (x86_64) - Intel 模拟器
+      # 3. 构建 iOS Simulator (x86_64)
+      # 修复: 添加 -DCMAKE_EXE_LINKER_FLAGS="-framework CoreFoundation"
       # ==================================================================
       - name: Build for Simulator (x86_64)
         run: |
@@ -102,36 +102,28 @@ jobs:
             -Dprotobuf_BUILD_PROTOC_BINARIES=OFF \
             -Dprotobuf_BUILD_SHARED_LIBS=OFF \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DCMAKE_CXX_STANDARD=17
+            -DCMAKE_CXX_STANDARD=17 \
+            -DCMAKE_EXE_LINKER_FLAGS="-framework CoreFoundation"
 
           cmake --build ${{ env.BUILD_SIM_X64 }} --target install
 
       # ==================================================================
-      # 4. 魔法步骤：合并 Protobuf 和 Abseil 库
-      # 这样在 Xcode 里你就只需要链接一个 .a 文件，而不是几十个
+      # 4. 合并静态库
       # ==================================================================
       - name: Merge Static Libraries
         run: |
-          # 函数：合并指定目录下的所有 .a 文件为一个 libprotobuf_combined.a
           merge_libs() {
             local DIR=$1
             local OUT=$2
             echo "Merging libraries in $DIR to $OUT..."
             cd $DIR/lib
-            # 使用 libtool 合并 libprotobuf.a 和所有 libabsl_*.a
             libtool -static -o $OUT *.a
           }
 
-          # 1. 合并 Device 库
           merge_libs "${{ env.INSTALL_DEVICE }}" "${{ env.INSTALL_DEVICE }}/libprotobuf_full.a"
-          
-          # 2. 合并 Sim arm64 库
           merge_libs "${{ env.INSTALL_SIM_ARM64 }}" "${{ env.INSTALL_SIM_ARM64 }}/libprotobuf_full.a"
-
-          # 3. 合并 Sim x86_64 库
           merge_libs "${{ env.INSTALL_SIM_X64 }}" "${{ env.INSTALL_SIM_X64 }}/libprotobuf_full.a"
 
-          # 4. 使用 Lipo 合并两个模拟器架构 (arm64 + x86_64)
           mkdir -p ${{ env.FINAL_SIM }}
           lipo -create \
             "${{ env.INSTALL_SIM_ARM64 }}/libprotobuf_full.a" \
@@ -145,7 +137,6 @@ jobs:
         run: |
           mkdir -p ${{ env.OUTPUT_DIR }}
           
-          # 只需要 Device 的完整库 和 合并后的 Simulator 完整库
           xcodebuild -create-xcframework \
             -library ${{ env.INSTALL_DEVICE }}/libprotobuf_full.a \
             -headers ${{ env.INSTALL_DEVICE }}/include \
@@ -153,10 +144,8 @@ jobs:
             -headers ${{ env.INSTALL_SIM_ARM64 }}/include \
             -output ${{ env.OUTPUT_DIR }}/ProtobufCpp.xcframework
 
-          # 创建说明
           echo "Protobuf v${{ env.PROTOBUF_VERSION }} C++ iOS SDK" > ${{ env.OUTPUT_DIR }}/README.txt
-          echo "This XCFramework includes ALL Abseil dependencies merged." >> ${{ env.OUTPUT_DIR }}/README.txt
-          echo "Simply drag ProtobufCpp.xcframework into Xcode." >> ${{ env.OUTPUT_DIR }}/README.txt
+          echo "Includes Abseil dependencies." >> ${{ env.OUTPUT_DIR }}/README.txt
 
       # 6. 打包
       - name: Zip Artifacts
@@ -181,5 +170,5 @@ jobs:
           gh release create "$TAG_NAME" \
             "${{ env.ZIP_PATH }}" \
             --title "$TITLE" \
-            --notes "Includes Protobuf + Abseil merged into a single XCFramework. Solves -msse4.1 issues and linking hell." \
+            --notes "Protobuf ${{ env.PROTOBUF_VERSION }} + Abseil linked with CoreFoundation." \
             --generate-notes
