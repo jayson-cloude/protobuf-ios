@@ -1,0 +1,129 @@
+name: Build and Release iOS Protobuf C++
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  build-and-release:
+    name: Build and Release
+    runs-on: macos-latest
+    permissions:
+      contents: write # 必须：允许创建 Release 和上传附件
+
+    env:
+      # === 修改这里来改变 Protobuf 版本 ===
+      PROTOBUF_VERSION: 29.3
+      # ==================================
+      
+      INSTALL_DIR_DEVICE: ${{ github.workspace }}/install/ios-device
+      INSTALL_DIR_SIM: ${{ github.workspace }}/install/ios-sim
+      OUTPUT_DIR: ${{ github.workspace }}/output
+      PACKAGE_NAME: protobuf-ios-cpp
+
+    steps:
+      # 1. 检出当前仓库 (如果你的仓库里有其他脚本)
+      - name: Checkout Helper Repository
+        uses: actions/checkout@v4
+
+      # 2. 安装构建工具
+      - name: Install CMake & Ninja
+        run: brew install cmake ninja
+
+      # 3. 下载 Protobuf 源码 (含子模块 Abseil)
+      - name: Download Protobuf Source
+        run: |
+          echo "Cloning Protobuf v${{ env.PROTOBUF_VERSION }}..."
+          # --recurse-submodules 非常重要，因为 Protobuf 依赖 third_party 下的 Abseil
+          git clone --depth 1 --branch v${{ env.PROTOBUF_VERSION }} --recurse-submodules https://github.com/protocolbuffers/protobuf.git
+
+      # 4. 为 iOS Device (真机 arm64) 构建
+      # 注意：-S 参数现在指向 "protobuf" 目录，而不是 "."
+      - name: Configure and Build for Device
+        run: |
+          cmake -G Ninja -S protobuf -B build_device \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR_DEVICE }} \
+            -Dprotobuf_BUILD_TESTS=OFF \
+            -Dprotobuf_BUILD_EXAMPLES=OFF \
+            -Dprotobuf_BUILD_PROTOC_BINARIES=OFF \
+            -Dprotobuf_BUILD_SHARED_LIBS=OFF \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DCMAKE_CXX_STANDARD=17
+          
+          cmake --build build_device --target install
+
+      # 5. 为 iOS Simulator (模拟器 arm64 + x86_64) 构建
+      - name: Configure and Build for Simulator
+        run: |
+          cmake -G Ninja -S protobuf -B build_sim \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphonesimulator \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DIR_SIM }} \
+            -Dprotobuf_BUILD_TESTS=OFF \
+            -Dprotobuf_BUILD_EXAMPLES=OFF \
+            -Dprotobuf_BUILD_PROTOC_BINARIES=OFF \
+            -Dprotobuf_BUILD_SHARED_LIBS=OFF \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DCMAKE_CXX_STANDARD=17
+
+          cmake --build build_sim --target install
+
+      # 6. 创建 XCFramework 并整理文件
+      - name: Create XCFramework
+        run: |
+          mkdir -p ${{ env.OUTPUT_DIR }}
+          
+          # 生成 libprotobuf.xcframework
+          xcodebuild -create-xcframework \
+            -library ${{ env.INSTALL_DIR_DEVICE }}/lib/libprotobuf.a \
+            -headers ${{ env.INSTALL_DIR_DEVICE }}/include \
+            -library ${{ env.INSTALL_DIR_SIM }}/lib/libprotobuf.a \
+            -headers ${{ env.INSTALL_DIR_SIM }}/include \
+            -output ${{ env.OUTPUT_DIR }}/libprotobuf.xcframework
+
+          # 收集 Abseil 依赖库 (Protobuf C++ 强依赖 Abseil)
+          mkdir -p ${{ env.OUTPUT_DIR }}/abseil_static_libs
+          cp ${{ env.INSTALL_DIR_DEVICE }}/lib/libabsl_*.a ${{ env.OUTPUT_DIR }}/abseil_static_libs/ || true
+          
+          # 创建说明文件
+          echo "Protobuf v${{ env.PROTOBUF_VERSION }} iOS SDK" > ${{ env.OUTPUT_DIR }}/README.txt
+          echo "Built on $(date)" >> ${{ env.OUTPUT_DIR }}/README.txt
+
+      # 7. 打包成 Zip
+      - name: Zip Artifacts
+        run: |
+          cd ${{ env.OUTPUT_DIR }}
+          zip -r ../${{ env.PACKAGE_NAME }}.zip .
+          echo "ZIP_PATH=${{ github.workspace }}/${{ env.PACKAGE_NAME }}.zip" >> $GITHUB_ENV
+
+      # 8. 创建 Release 并上传
+      - name: Create Release and Upload
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 自动生成 Tag 名称
+          TAG_NAME="v${{ env.PROTOBUF_VERSION }}-ios-$(date +%Y%m%d)"
+          TITLE="Protobuf v${{ env.PROTOBUF_VERSION }} for iOS"
+          
+          # 如果是因为打 tag 触发的，使用 git tag；否则使用上面的自动名称
+          if [[ $GITHUB_REF == refs/tags/* ]]; then
+            TAG_NAME=${GITHUB_REF#refs/tags/}
+            TITLE="Release $TAG_NAME"
+          fi
+
+          echo "Creating release $TAG_NAME..."
+
+          gh release create "$TAG_NAME" \
+            "${{ env.ZIP_PATH }}" \
+            --title "$TITLE" \
+            --notes "Protobuf ${{ env.PROTOBUF_VERSION }} (C++).\nIncludes xcframework and Abseil static libs." \
+            --generate-notes
