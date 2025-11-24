@@ -1,4 +1,4 @@
-name: Build and Release iOS Protobuf C++
+name: Build and Release iOS Protobuf 3.20.3
 
 on:
   push:
@@ -16,16 +16,21 @@ jobs:
       contents: write
 
     env:
+      # === 指定版本 3.20.3 ===
       PROTOBUF_VERSION: 3.20.3
+      
+      # 定义构建路径
       BUILD_DEVICE: ${{ github.workspace }}/build_device
       BUILD_SIM_ARM64: ${{ github.workspace }}/build_sim_arm64
       BUILD_SIM_X64: ${{ github.workspace }}/build_sim_x64
+      
+      # 定义安装路径
       INSTALL_DEVICE: ${{ github.workspace }}/install/ios-device
       INSTALL_SIM_ARM64: ${{ github.workspace }}/install/ios-sim-arm64
       INSTALL_SIM_X64: ${{ github.workspace }}/install/ios-sim-x64
       FINAL_SIM: ${{ github.workspace }}/install/ios-sim-fat
       OUTPUT_DIR: ${{ github.workspace }}/output
-      PACKAGE_NAME: protobuf-ios-cpp
+      PACKAGE_NAME: protobuf-ios-cpp-3.20.3
 
     steps:
       - name: Checkout Helper Repository
@@ -37,93 +42,105 @@ jobs:
       - name: Download Protobuf Source
         run: |
           echo "Cloning Protobuf v${{ env.PROTOBUF_VERSION }}..."
+          # 3.20.3 必须包含子模块
           git clone --depth 1 --branch v${{ env.PROTOBUF_VERSION }} --recurse-submodules https://github.com/protocolbuffers/protobuf.git
 
       # ==================================================================
       # 1. 构建 iOS Device (arm64)
-      # 修复: 添加 -DCMAKE_EXE_LINKER_FLAGS="-framework CoreFoundation"
+      # 修正: -S protobuf/cmake (3.x 版本特有路径)
       # ==================================================================
       - name: Build for Device (arm64)
         run: |
-          cmake -G Ninja -S protobuf -B ${{ env.BUILD_DEVICE }} \
+          cmake -G Ninja -S protobuf/cmake -B ${{ env.BUILD_DEVICE }} \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_SYSTEM_PROCESSOR=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_DEVICE }} \
             -Dprotobuf_BUILD_TESTS=OFF \
             -Dprotobuf_BUILD_EXAMPLES=OFF \
             -Dprotobuf_BUILD_PROTOC_BINARIES=OFF \
             -Dprotobuf_BUILD_SHARED_LIBS=OFF \
+            -Dprotobuf_WITH_ZLIB=OFF \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DCMAKE_CXX_STANDARD=17 \
-            -DCMAKE_EXE_LINKER_FLAGS="-framework CoreFoundation" 
+            -DCMAKE_CXX_STANDARD=14 \
+            -DCMAKE_EXE_LINKER_FLAGS="-framework CoreFoundation"
           
           cmake --build ${{ env.BUILD_DEVICE }} --target install
 
       # ==================================================================
       # 2. 构建 iOS Simulator (arm64)
-      # 修复: 添加 -DCMAKE_EXE_LINKER_FLAGS="-framework CoreFoundation"
       # ==================================================================
       - name: Build for Simulator (arm64)
         run: |
-          cmake -G Ninja -S protobuf -B ${{ env.BUILD_SIM_ARM64 }} \
+          cmake -G Ninja -S protobuf/cmake -B ${{ env.BUILD_SIM_ARM64 }} \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphonesimulator \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_SYSTEM_PROCESSOR=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_SIM_ARM64 }} \
             -Dprotobuf_BUILD_TESTS=OFF \
             -Dprotobuf_BUILD_EXAMPLES=OFF \
             -Dprotobuf_BUILD_PROTOC_BINARIES=OFF \
             -Dprotobuf_BUILD_SHARED_LIBS=OFF \
+            -Dprotobuf_WITH_ZLIB=OFF \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DCMAKE_CXX_STANDARD=17 \
+            -DCMAKE_CXX_STANDARD=14 \
             -DCMAKE_EXE_LINKER_FLAGS="-framework CoreFoundation"
 
           cmake --build ${{ env.BUILD_SIM_ARM64 }} --target install
 
       # ==================================================================
       # 3. 构建 iOS Simulator (x86_64)
-      # 修复: 添加 -DCMAKE_EXE_LINKER_FLAGS="-framework CoreFoundation"
       # ==================================================================
       - name: Build for Simulator (x86_64)
         run: |
-          cmake -G Ninja -S protobuf -B ${{ env.BUILD_SIM_X64 }} \
+          cmake -G Ninja -S protobuf/cmake -B ${{ env.BUILD_SIM_X64 }} \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphonesimulator \
             -DCMAKE_OSX_ARCHITECTURES=x86_64 \
             -DCMAKE_SYSTEM_PROCESSOR=x86_64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DCMAKE_INSTALL_PREFIX=${{ env.INSTALL_SIM_X64 }} \
             -Dprotobuf_BUILD_TESTS=OFF \
             -Dprotobuf_BUILD_EXAMPLES=OFF \
             -Dprotobuf_BUILD_PROTOC_BINARIES=OFF \
             -Dprotobuf_BUILD_SHARED_LIBS=OFF \
+            -Dprotobuf_WITH_ZLIB=OFF \
             -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-            -DCMAKE_CXX_STANDARD=17 \
+            -DCMAKE_CXX_STANDARD=14 \
             -DCMAKE_EXE_LINKER_FLAGS="-framework CoreFoundation"
 
           cmake --build ${{ env.BUILD_SIM_X64 }} --target install
 
       # ==================================================================
-      # 4. 合并静态库
+      # 4. 合并静态库 (Protobuf 3.x 可能不生成单独的 absl 库)
       # ==================================================================
       - name: Merge Static Libraries
         run: |
+          # 3.20.3 可能会把代码直接编译进 libprotobuf.a，但也可能生成 libabsl
+          # 无论哪种情况，下面的脚本都兼容：如果有 absl 就合并，没有就只用 protobuf
+          
           merge_libs() {
             local DIR=$1
             local OUT=$2
             echo "Merging libraries in $DIR to $OUT..."
             cd $DIR/lib
-            libtool -static -o $OUT *.a
+            # 检查是否有 .a 文件
+            if ls *.a 1> /dev/null 2>&1; then
+                libtool -static -o $OUT *.a
+            else
+                echo "Error: No static libraries found in $DIR/lib"
+                exit 1
+            fi
           }
 
           merge_libs "${{ env.INSTALL_DEVICE }}" "${{ env.INSTALL_DEVICE }}/libprotobuf_full.a"
           merge_libs "${{ env.INSTALL_SIM_ARM64 }}" "${{ env.INSTALL_SIM_ARM64 }}/libprotobuf_full.a"
           merge_libs "${{ env.INSTALL_SIM_X64 }}" "${{ env.INSTALL_SIM_X64 }}/libprotobuf_full.a"
 
+          # 合并模拟器架构
           mkdir -p ${{ env.FINAL_SIM }}
           lipo -create \
             "${{ env.INSTALL_SIM_ARM64 }}/libprotobuf_full.a" \
@@ -145,7 +162,6 @@ jobs:
             -output ${{ env.OUTPUT_DIR }}/ProtobufCpp.xcframework
 
           echo "Protobuf v${{ env.PROTOBUF_VERSION }} C++ iOS SDK" > ${{ env.OUTPUT_DIR }}/README.txt
-          echo "Includes Abseil dependencies." >> ${{ env.OUTPUT_DIR }}/README.txt
 
       # 6. 打包
       - name: Zip Artifacts
@@ -159,8 +175,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG_NAME="v${{ env.PROTOBUF_VERSION }}-ios-combined-$(date +%Y%m%d)"
-          TITLE="Protobuf v${{ env.PROTOBUF_VERSION }} iOS (All-in-One)"
+          TAG_NAME="v${{ env.PROTOBUF_VERSION }}-ios-$(date +%Y%m%d)"
+          TITLE="Protobuf v${{ env.PROTOBUF_VERSION }} iOS"
           
           if [[ $GITHUB_REF == refs/tags/* ]]; then
             TAG_NAME=${GITHUB_REF#refs/tags/}
@@ -170,5 +186,5 @@ jobs:
           gh release create "$TAG_NAME" \
             "${{ env.ZIP_PATH }}" \
             --title "$TITLE" \
-            --notes "Protobuf ${{ env.PROTOBUF_VERSION }} + Abseil linked with CoreFoundation." \
+            --notes "Protobuf ${{ env.PROTOBUF_VERSION }} for iOS (C++14)." \
             --generate-notes
