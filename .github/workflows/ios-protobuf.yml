@@ -16,7 +16,7 @@ jobs:
       contents: write
 
     env:
-      PROTOBUF_VERSION: 29.3
+      PROTOBUF_VERSION: 3.20.3
       BUILD_DEVICE: ${{ github.workspace }}/build_device
       BUILD_SIM_ARM64: ${{ github.workspace }}/build_sim_arm64
       BUILD_SIM_X64: ${{ github.workspace }}/build_sim_x64
